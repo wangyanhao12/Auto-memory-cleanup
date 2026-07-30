@@ -1,0 +1,23 @@
+{
+	"schemaVersion": 1,
+	"id": "memorysweep",
+	"version": "${version}",
+	"name": "MemorySweep",
+	"description": "自动清理服务器内存的模组:支持定时清理与基于内存使用率的智能清理,并提供 /memorysweep 指令手动清理。",
+	"authors": [
+		"Your Name"
+	],
+	"license": "MIT",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.memorysweep.MemorySweepMod"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.19.3",
+		"minecraft": "~26.1.2",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
