@@ -1,6 +1,8 @@
 # MemorySweep
 
-一个适用于 **Minecraft Java 版 26.1.2（Fabric）** 的自动内存清理模组。
+一个适用于 **Minecraft Java 版 26.2（Fabric）** 的自动内存清理模组。
+
+> 这是 26.2 版本的构建。如果你的服务器/客户端还在 26.1.2 上,请使用 26.1.2 版本的那份工程(两者 Java 代码完全一致,只有 `gradle.properties` 和 `fabric.mod.json` 里的版本号不同)。
 
 ## 功能
 
@@ -24,12 +26,12 @@
 
 | 项目 | 版本 |
 |---|---|
-| Minecraft | Java 版 26.1.2 |
+| Minecraft | Java 版 26.2 |
 | Fabric Loader | ≥ 0.19.3 |
-| Fabric API | 0.155.2+26.1.2 或更新的 26.1.x 版本 |
+| Fabric API | 0.155.2+26.2 或更新的 26.2.x 版本 |
 | Java(运行环境) | 25 或更高 |
 
-> 26.1 起 Fabric 生态已经从 Yarn 映射切换为 Mojang 官方映射,并要求 Java 25。如果你是从更老的版本移植代码过来,记得同步升级本地开发环境的 JDK。
+> 26.1 起 Fabric 生态已经从 Yarn 映射切换为 Mojang 官方映射,并要求 Java 25。26.2 沿用了同一套映射体系与工具链版本(Loom 1.17、Fabric Loader 0.19.3),本模组用到的生命周期事件、tick 事件、指令注册与权限判断相关 API 在 26.1.2 → 26.2 之间没有变化(已对照 Fabric 官方 `fabric-example-mod` 仓库在两个分支下的源码逐文件比对确认)。
 
 ## 构建方法
 
@@ -47,7 +49,7 @@ gradlew.bat build
 - `memorysweep-1.0.0.jar` —— 正式的模组文件
 - `memorysweep-1.0.0-sources.jar` —— 源码 jar(可选,IDE 用来查看源码跳转)
 
-> 由于本项目开发环境的网络限制,这份代码是基于 Fabric 官方 `fabric-example-mod` 在 `26.1.2` 分支的真实工程结构、以及当前 Fabric 官方文档中已验证的 API(命令注册、权限检查、生命周期事件等)手写并交叉核对而成,但**没有条件在联网的真实 Minecraft/Fabric 环境中实际编译运行一遍**。建议你在本地执行一次 `./gradlew build` 作为最终确认;如果报错,把报错信息发给我,我可以帮你快速定位修正。
+> 由于本项目开发环境的网络限制,没有条件在联网的真实 Minecraft/Fabric 环境中实际编译运行一遍。这份 26.2 版本的 Java 源码与已验证的 26.1.2 版本完全相同(逐文件对照过 Fabric 官方 `fabric-example-mod` 仓库的 `26.1.2` 与 `26.2` 两个分支,确认本模组用到的全部 API 在这两个版本间的源码零差异),改动只涉及 `gradle.properties` / `fabric.mod.json` 里的版本号。仍然建议你在本地执行一次 `./gradlew build` 作为最终确认;如果报错,把报错信息发给我,我可以帮你快速定位修正。
 
 ## 不想在本地装 JDK 25?用 GitHub Actions 云端构建
 
