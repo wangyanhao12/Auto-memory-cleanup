@@ -1,41 +1,56 @@
 package com.memorysweep;
 
-import com.memorysweep.command.MemorySweepCommand;
 import com.memorysweep.config.MemorySweepConfig;
-import net.fabricmc.api.ModInitializer;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import net.mine_diver.unsafeevents.listener.EventListener;
+import net.modificationstation.stationapi.api.event.mod.InitEvent;
+import net.modificationstation.stationapi.api.mod.entrypoint.EntrypointManager;
+import net.modificationstation.stationapi.api.util.Namespace;
+import org.apache.logging.log4j.Logger;
+
+import java.lang.invoke.MethodHandles;
 
 /**
- * MemorySweep —— 自动清理服务器内存的 Fabric 模组。
- *
- * <ul>
- *   <li>提供 {@code /memorysweep} 指令用于手动清理内存。</li>
- *   <li>默认每 15 分钟自动清理一次(可在 config/memorysweep.json 中调整)。</li>
- *   <li>同时根据堆内存使用率自动清理,但同一冷却周期(默认 2 分钟)内只执行一次。</li>
- * </ul>
+ * MemorySweep 的核心静态持有者。
+ * <p>
+ * 在 {@link InitEvent}(StationAPI 通用初始化事件,客户端/服务端都会触发)时加载配置、
+ * 创建共享的 {@link MemoryMonitor} 实例,供 {@link MemoryCleanupListener}(服务端 tick 触发)
+ * 与 {@link KeybindListener}(客户端按键触发)共同使用。
  */
-public final class MemorySweepMod implements ModInitializer {
+public final class MemorySweepMod {
 
-    public static final String MOD_ID = "memorysweep";
-    public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
+    static {
+        EntrypointManager.registerLookup(MethodHandles.lookup());
+    }
+
+    @SuppressWarnings("UnstableApiUsage")
+    public static final Namespace NAMESPACE = Namespace.resolve();
+
+    public static final Logger LOGGER = NAMESPACE.getLogger();
 
     private static MemorySweepConfig config;
     private static MemoryMonitor memoryMonitor;
 
-    @Override
-    public void onInitialize() {
+    private MemorySweepMod() {
+    }
+
+    @EventListener
+    private static void onInit(InitEvent event) {
         config = MemorySweepConfig.load(LOGGER);
-        memoryMonitor = new MemoryMonitor(config, LOGGER);
+        memoryMonitor = new MemoryMonitor(LOGGER, config.logToConsole);
 
-        MemorySweepCommand.register();
+        LOGGER.info("[MemorySweep] 模组已加载 | 定时清理: " + describeSchedule()
+                + " | 使用率触发清理: " + describeUsageTrigger()
+                + " | 手动触发: 默认快捷键 H(可在 控制选项 里重新绑定,仅本地/单人生效)");
+    }
 
-        ServerLifecycleEvents.SERVER_STARTED.register(memoryMonitor::onServerStarted);
-        ServerTickEvents.END_SERVER_TICK.register(memoryMonitor::onServerTick);
+    private static String describeSchedule() {
+        return config.autoCleanupEnabled ? ("每 " + config.intervalMinutes + " 分钟一次") : "已禁用";
+    }
 
-        LOGGER.info("[MemorySweep] 模组已加载。使用 /memorysweep 手动清理内存,或编辑 config/memorysweep.json 调整自动清理行为。");
+    private static String describeUsageTrigger() {
+        return config.usageBasedCleanupEnabled
+                ? ("已启用(阈值 " + config.memoryUsageThresholdPercent + "%,冷却 " + config.usageCheckCooldownSeconds + " 秒)")
+                : "已禁用";
     }
 
     public static MemorySweepConfig getConfig() {

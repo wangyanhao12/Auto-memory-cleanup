@@ -1,36 +1,27 @@
 package com.memorysweep;
 
-import com.memorysweep.config.MemorySweepConfig;
-import net.minecraft.ChatFormatting;
-import net.minecraft.network.chat.Component;
-import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.permissions.Permissions;
-import org.slf4j.Logger;
+import org.apache.logging.log4j.Logger;
 
 import java.util.Locale;
 
 /**
- * 内存监控与清理的核心逻辑。
+ * 内存监控与清理的核心逻辑,与具体触发方式(定时 tick、按键)解耦。
  *
- * <p>本类只会在服务器主线程(tick 线程)上被访问 —— {@link #onServerTick} 由
- * {@code ServerTickEvents.END_SERVER_TICK} 驱动,指令执行也运行在同一线程上,
- * 因此这里不需要任何额外的同步处理。</p>
- *
- * <p>支持三种触发清理的方式:</p>
+ * <p>支持的触发方式:</p>
  * <ul>
- *   <li>手动:玩家/控制台执行 {@code /memorysweep}</li>
  *   <li>定时:每隔 {@code intervalMinutes} 分钟(默认 15 分钟)清理一次</li>
  *   <li>使用率:堆内存占用达到 {@code memoryUsageThresholdPercent}(默认 80%)时清理,
  *       但距离上一次清理(无论是何种触发方式)不足 {@code usageCheckCooldownSeconds}
  *       (默认 120 秒,即 2 分钟)时不会重复触发。</li>
+ *   <li>手动:玩家按下快捷键(见 {@code KeybindListener}),仅在本地/单人环境下生效,
+ *       因为这只是一个客户端按键,清理的是当前 JVM 的内存 —— 单人游戏时这个 JVM 同时
+ *       跑着客户端和内嵌服务端,联机连接他人服务器时则只会清理你自己客户端这一侧。</li>
  * </ul>
  */
 public final class MemoryMonitor {
 
-    /** 清理的触发原因,用于日志/聊天提示文本。 */
     public enum CleanupReason {
-        MANUAL("手动清理"),
+        MANUAL("手动清理(快捷键)"),
         SCHEDULED("定时自动清理"),
         USAGE_TRIGGERED("内存使用率触发清理");
 
@@ -45,9 +36,20 @@ public final class MemoryMonitor {
         }
     }
 
-    /** 一次清理执行前后的内存快照与结果,用于生成提示文本。 */
-    public record CleanupResult(long beforeUsedBytes, long afterUsedBytes, long maxBytes, long durationMillis,
-            CleanupReason reason) {
+    public static final class CleanupResult {
+        private final long beforeUsedBytes;
+        private final long afterUsedBytes;
+        private final long maxBytes;
+        private final long durationMillis;
+        private final CleanupReason reason;
+
+        CleanupResult(long beforeUsedBytes, long afterUsedBytes, long maxBytes, long durationMillis, CleanupReason reason) {
+            this.beforeUsedBytes = beforeUsedBytes;
+            this.afterUsedBytes = afterUsedBytes;
+            this.maxBytes = maxBytes;
+            this.durationMillis = durationMillis;
+            this.reason = reason;
+        }
 
         public long freedBytes() {
             return Math.max(0L, beforeUsedBytes - afterUsedBytes);
@@ -78,79 +80,14 @@ public final class MemoryMonitor {
         }
     }
 
-    private final MemorySweepConfig config;
     private final Logger logger;
+    private final boolean logToConsole;
 
-    private int tickCounter = 0;
     private long lastCleanupTimeMillis = 0L;
-    private long lastScheduledCleanupTimeMillis = 0L;
-    private long lastUsageCheckTimeMillis = 0L;
 
-    public MemoryMonitor(MemorySweepConfig config, Logger logger) {
-        this.config = config;
+    public MemoryMonitor(Logger logger, boolean logToConsole) {
         this.logger = logger;
-    }
-
-    /**
-     * 服务器启动完成后调用一次,重置所有计时器,让定时清理从“服务器真正开始运行”那一刻起算。
-     */
-    public void onServerStarted(MinecraftServer server) {
-        long now = System.currentTimeMillis();
-        this.lastScheduledCleanupTimeMillis = now;
-        this.lastCleanupTimeMillis = 0L; // 允许使用率触发的清理在启动后立刻可用,不受冷却限制
-        this.lastUsageCheckTimeMillis = 0L;
-        this.tickCounter = 0;
-
-        if (config.logToConsole) {
-            logger.info(
-                    "[MemorySweep] 内存监控已启动 | 定时清理: {} | 使用率触发清理: {}(阈值 {}%,冷却 {} 秒)",
-                    config.autoCleanupEnabled ? ("每 " + config.intervalMinutes + " 分钟一次") : "已禁用",
-                    config.usageBasedCleanupEnabled ? "已启用" : "已禁用",
-                    config.memoryUsageThresholdPercent,
-                    config.usageCheckCooldownSeconds);
-        }
-    }
-
-    /**
-     * 每个服务器 tick 调用一次。内部按秒节流,避免每 tick 都做时间/内存运算。
-     */
-    public void onServerTick(MinecraftServer server) {
-        tickCounter++;
-        if (tickCounter < 20) { // 20 tick ≈ 1 秒(服务器满速运行时)
-            return;
-        }
-        tickCounter = 0;
-
-        long now = System.currentTimeMillis();
-
-        if (config.autoCleanupEnabled) {
-            long intervalMillis = config.intervalMinutes * 60_000L;
-            if (now - lastScheduledCleanupTimeMillis >= intervalMillis) {
-                lastScheduledCleanupTimeMillis = now;
-                performCleanup(server, CleanupReason.SCHEDULED);
-            }
-        }
-
-        if (config.usageBasedCleanupEnabled) {
-            long usageCheckIntervalMillis = config.usageCheckIntervalSeconds * 1000L;
-            if (now - lastUsageCheckTimeMillis >= usageCheckIntervalMillis) {
-                lastUsageCheckTimeMillis = now;
-                maybeTriggerUsageCleanup(server, now);
-            }
-        }
-    }
-
-    private void maybeTriggerUsageCleanup(MinecraftServer server, long now) {
-        if (currentUsagePercent() < config.memoryUsageThresholdPercent) {
-            return;
-        }
-
-        long cooldownMillis = config.usageCheckCooldownSeconds * 1000L;
-        if (now - lastCleanupTimeMillis < cooldownMillis) {
-            return; // 冷却中:同一冷却周期内(默认 2 分钟)只允许触发一次
-        }
-
-        performCleanup(server, CleanupReason.USAGE_TRIGGERED);
+        this.logToConsole = logToConsole;
     }
 
     /** 当前堆内存使用率(0-100)。 */
@@ -164,11 +101,19 @@ public final class MemoryMonitor {
         return (used * 100.0) / max;
     }
 
+    /** 距离上一次清理(无论何种触发方式)经过的毫秒数;尚未清理过则返回一个很大的数。 */
+    public long millisSinceLastCleanup() {
+        if (lastCleanupTimeMillis == 0L) {
+            return Long.MAX_VALUE / 2;
+        }
+        return System.currentTimeMillis() - lastCleanupTimeMillis;
+    }
+
     /**
-     * 立即执行一次内存清理(调用 {@link System#gc()}),并根据配置输出日志/聊天播报。
-     * 该方法本身不做冷却判断 —— 冷却只限制“使用率自动触发”,手动指令与定时清理调用此方法时始终会真正执行。
+     * 立即执行一次内存清理(调用 {@link System#gc()}),并根据配置输出日志。
+     * 该方法本身不做冷却判断 —— 冷却只用于限制"使用率自动触发",调用方需要自行决定何时调用本方法。
      */
-    public CleanupResult performCleanup(MinecraftServer server, CleanupReason reason) {
+    public CleanupResult performCleanup(CleanupReason reason) {
         Runtime runtime = Runtime.getRuntime();
         long beforeUsed = runtime.totalMemory() - runtime.freeMemory();
 
@@ -182,50 +127,10 @@ public final class MemoryMonitor {
 
         CleanupResult result = new CleanupResult(beforeUsed, afterUsed, runtime.maxMemory(), durationMillis, reason);
 
-        if (config.logToConsole) {
-            logger.info("[MemorySweep] {}", result.toLogText());
-        }
-
-        if (config.broadcastToOps && server != null) {
-            broadcastToOps(server, result);
+        if (logToConsole) {
+            logger.info("[MemorySweep] " + result.toLogText());
         }
 
         return result;
-    }
-
-    private void broadcastToOps(MinecraftServer server, CleanupResult result) {
-        Component message = Component.literal(result.toChatText()).withStyle(ChatFormatting.GRAY);
-        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-            if (player.permissions().hasPermission(Permissions.COMMANDS_MODERATOR)) {
-                player.sendSystemMessage(message);
-            }
-        }
-    }
-
-    /** 供 {@code /memorysweep status} 使用的一段人类可读状态文本。 */
-    public String statusText() {
-        Runtime runtime = Runtime.getRuntime();
-        long used = runtime.totalMemory() - runtime.freeMemory();
-        long max = runtime.maxMemory();
-        double percent = currentUsagePercent();
-
-        long now = System.currentTimeMillis();
-        long nextScheduledSeconds = -1;
-        if (config.autoCleanupEnabled) {
-            long intervalMillis = config.intervalMinutes * 60_000L;
-            nextScheduledSeconds = Math.max(0L, (lastScheduledCleanupTimeMillis + intervalMillis - now) / 1000L);
-        }
-
-        String scheduledPart = config.autoCleanupEnabled
-                ? String.format(Locale.ROOT, "每 %d 分钟一次(约 %d 秒后下一次)", config.intervalMinutes, nextScheduledSeconds)
-                : "已禁用";
-        String usagePart = config.usageBasedCleanupEnabled
-                ? String.format(Locale.ROOT, "已启用(阈值 %d%%,冷却 %d 秒)", config.memoryUsageThresholdPercent,
-                        config.usageCheckCooldownSeconds)
-                : "已禁用";
-
-        return String.format(Locale.ROOT,
-                "[内存清理状态] 当前使用 %d/%d MB (%.1f%%) | 定时清理: %s | 使用率触发: %s",
-                used / (1024 * 1024), max / (1024 * 1024), percent, scheduledPart, usagePart);
     }
 }
