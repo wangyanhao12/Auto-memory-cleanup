@@ -14,8 +14,8 @@ import java.util.Locale;
  * 内存监控与清理的核心逻辑。
  *
  * <p>本类只会在服务器主线程(tick 线程)上被访问 —— {@link #onServerTick} 由
- * {@code ServerTickEvents.END_SERVER_TICK} 驱动,指令执行也运行在同一线程上,
- * 因此这里不需要任何额外的同步处理。</p>
+ * {@code ServerTickEvent.Post} 驱动,指令执行也运行在同一线程上,因此这里不需要
+ * 任何额外的同步处理。</p>
  *
  * <p>支持三种触发清理的方式:</p>
  * <ul>
@@ -78,7 +78,6 @@ public final class MemoryMonitor {
         }
     }
 
-    private final MemorySweepConfig config;
     private final Logger logger;
 
     private int tickCounter = 0;
@@ -86,8 +85,7 @@ public final class MemoryMonitor {
     private long lastScheduledCleanupTimeMillis = 0L;
     private long lastUsageCheckTimeMillis = 0L;
 
-    public MemoryMonitor(MemorySweepConfig config, Logger logger) {
-        this.config = config;
+    public MemoryMonitor(Logger logger) {
         this.logger = logger;
     }
 
@@ -101,13 +99,15 @@ public final class MemoryMonitor {
         this.lastUsageCheckTimeMillis = 0L;
         this.tickCounter = 0;
 
-        if (config.logToConsole) {
+        if (MemorySweepConfig.LOG_TO_CONSOLE.get()) {
             logger.info(
                     "[MemorySweep] 内存监控已启动 | 定时清理: {} | 使用率触发清理: {}(阈值 {}%,冷却 {} 秒)",
-                    config.autoCleanupEnabled ? ("每 " + config.intervalMinutes + " 分钟一次") : "已禁用",
-                    config.usageBasedCleanupEnabled ? "已启用" : "已禁用",
-                    config.memoryUsageThresholdPercent,
-                    config.usageCheckCooldownSeconds);
+                    MemorySweepConfig.AUTO_CLEANUP_ENABLED.get()
+                            ? ("每 " + MemorySweepConfig.INTERVAL_MINUTES.get() + " 分钟一次")
+                            : "已禁用",
+                    MemorySweepConfig.USAGE_BASED_CLEANUP_ENABLED.get() ? "已启用" : "已禁用",
+                    MemorySweepConfig.MEMORY_USAGE_THRESHOLD_PERCENT.get(),
+                    MemorySweepConfig.USAGE_CHECK_COOLDOWN_SECONDS.get());
         }
     }
 
@@ -123,16 +123,16 @@ public final class MemoryMonitor {
 
         long now = System.currentTimeMillis();
 
-        if (config.autoCleanupEnabled) {
-            long intervalMillis = config.intervalMinutes * 60_000L;
+        if (MemorySweepConfig.AUTO_CLEANUP_ENABLED.get()) {
+            long intervalMillis = MemorySweepConfig.INTERVAL_MINUTES.get() * 60_000L;
             if (now - lastScheduledCleanupTimeMillis >= intervalMillis) {
                 lastScheduledCleanupTimeMillis = now;
                 performCleanup(server, CleanupReason.SCHEDULED);
             }
         }
 
-        if (config.usageBasedCleanupEnabled) {
-            long usageCheckIntervalMillis = config.usageCheckIntervalSeconds * 1000L;
+        if (MemorySweepConfig.USAGE_BASED_CLEANUP_ENABLED.get()) {
+            long usageCheckIntervalMillis = MemorySweepConfig.USAGE_CHECK_INTERVAL_SECONDS.get() * 1000L;
             if (now - lastUsageCheckTimeMillis >= usageCheckIntervalMillis) {
                 lastUsageCheckTimeMillis = now;
                 maybeTriggerUsageCleanup(server, now);
@@ -141,11 +141,11 @@ public final class MemoryMonitor {
     }
 
     private void maybeTriggerUsageCleanup(MinecraftServer server, long now) {
-        if (currentUsagePercent() < config.memoryUsageThresholdPercent) {
+        if (currentUsagePercent() < MemorySweepConfig.MEMORY_USAGE_THRESHOLD_PERCENT.get()) {
             return;
         }
 
-        long cooldownMillis = config.usageCheckCooldownSeconds * 1000L;
+        long cooldownMillis = MemorySweepConfig.USAGE_CHECK_COOLDOWN_SECONDS.get() * 1000L;
         if (now - lastCleanupTimeMillis < cooldownMillis) {
             return; // 冷却中:同一冷却周期内(默认 2 分钟)只允许触发一次
         }
@@ -182,11 +182,11 @@ public final class MemoryMonitor {
 
         CleanupResult result = new CleanupResult(beforeUsed, afterUsed, runtime.maxMemory(), durationMillis, reason);
 
-        if (config.logToConsole) {
+        if (MemorySweepConfig.LOG_TO_CONSOLE.get()) {
             logger.info("[MemorySweep] {}", result.toLogText());
         }
 
-        if (config.broadcastToOps && server != null) {
+        if (MemorySweepConfig.BROADCAST_TO_OPS.get() && server != null) {
             broadcastToOps(server, result);
         }
 
@@ -211,17 +211,19 @@ public final class MemoryMonitor {
 
         long now = System.currentTimeMillis();
         long nextScheduledSeconds = -1;
-        if (config.autoCleanupEnabled) {
-            long intervalMillis = config.intervalMinutes * 60_000L;
+        if (MemorySweepConfig.AUTO_CLEANUP_ENABLED.get()) {
+            long intervalMillis = MemorySweepConfig.INTERVAL_MINUTES.get() * 60_000L;
             nextScheduledSeconds = Math.max(0L, (lastScheduledCleanupTimeMillis + intervalMillis - now) / 1000L);
         }
 
-        String scheduledPart = config.autoCleanupEnabled
-                ? String.format(Locale.ROOT, "每 %d 分钟一次(约 %d 秒后下一次)", config.intervalMinutes, nextScheduledSeconds)
+        String scheduledPart = MemorySweepConfig.AUTO_CLEANUP_ENABLED.get()
+                ? String.format(Locale.ROOT, "每 %d 分钟一次(约 %d 秒后下一次)", MemorySweepConfig.INTERVAL_MINUTES.get(),
+                        nextScheduledSeconds)
                 : "已禁用";
-        String usagePart = config.usageBasedCleanupEnabled
-                ? String.format(Locale.ROOT, "已启用(阈值 %d%%,冷却 %d 秒)", config.memoryUsageThresholdPercent,
-                        config.usageCheckCooldownSeconds)
+        String usagePart = MemorySweepConfig.USAGE_BASED_CLEANUP_ENABLED.get()
+                ? String.format(Locale.ROOT, "已启用(阈值 %d%%,冷却 %d 秒)",
+                        MemorySweepConfig.MEMORY_USAGE_THRESHOLD_PERCENT.get(),
+                        MemorySweepConfig.USAGE_CHECK_COOLDOWN_SECONDS.get())
                 : "已禁用";
 
         return String.format(Locale.ROOT,

@@ -1,62 +1,99 @@
 plugins {
-	id 'net.fabricmc.fabric-loom' version "${loom_version}"
-	id 'maven-publish'
+    id 'java-library'
+    id 'maven-publish'
+    id 'net.neoforged.moddev' version '2.0.143'
+    id 'idea'
 }
 
-version = project.mod_version
-group = project.maven_group
+tasks.named('wrapper', Wrapper).configure {
+    distributionType = Wrapper.DistributionType.BIN
+}
+
+version = mod_version
+group = mod_group_id
 
 repositories {
-	// 在此添加除 Fabric/Minecraft 官方仓库之外、你的模组依赖所需要的仓库。
-	// Loom 已经会自动添加下载 Minecraft 与相关库所需要的仓库。
+    // 如果依赖了其他仓库的库,在这里添加
+}
+
+base {
+    archivesName = mod_id
+}
+
+// Minecraft 26.1.2 面向最终用户使用 Java 25,模组也应以 Java 25 为目标
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+
+neoForge {
+    version = project.neo_version
+
+    runs {
+        client {
+            client()
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        server {
+            server()
+            programArgument '--nogui'
+            systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+        }
+
+        configureEach {
+            systemProperty 'forge.logging.markers', 'REGISTRIES'
+            logLevel = org.slf4j.event.Level.DEBUG
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
 }
 
 dependencies {
-	// 如需修改版本号,请编辑 gradle.properties
-	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
-
-	// Fabric API
-	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+    // 如需依赖其他模组,在这里添加
 }
 
-processResources {
-	def version = project.version
-	inputs.property "version", version
+// 展开 neoforge.mods.toml 模板里的 ${...} 占位符
+var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
+    var replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            neo_version            : neo_version,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+    ]
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from "src/main/templates"
+    into "build/generated/sources/modMetadata"
+}
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata
 
-	filesMatching("fabric.mod.json") {
-		expand "version": version
-	}
+publishing {
+    publications {
+        register('mavenJava', MavenPublication) {
+            from components.java
+        }
+    }
+    repositories {
+        maven {
+            url "file://${project.projectDir}/repo"
+        }
+    }
 }
 
 tasks.withType(JavaCompile).configureEach {
-	it.options.release = 25
+    options.encoding = 'UTF-8'
 }
 
-java {
-	// Loom 会自动把 sourcesJar 附加到 RemapSourcesJar / build 任务上(如果存在的话)
-	withSourcesJar()
-
-	sourceCompatibility = JavaVersion.VERSION_25
-	targetCompatibility = JavaVersion.VERSION_25
-}
-
-jar {
-	def projectName = project.name
-
-	from("LICENSE") {
-		rename { "${it}_$projectName" }
-	}
-}
-
-publishing {
-	publications {
-		create("mavenJava", MavenPublication) {
-			from components.java
-		}
-	}
-
-	repositories {
-		// 在此添加你要发布到的 Maven 仓库
-	}
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
+    }
 }
